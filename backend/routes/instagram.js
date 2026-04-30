@@ -5,29 +5,25 @@ const router = express.Router();
 // In-memory download history
 const downloadHistory = [];
 
-// RapidAPI Configuration
-const RAPIDAPI_HOST = 'instagram120.p.rapidapi.com';
-const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || 'dc3bcd60c0mshbe8a2e179bedd3dp1a0b4bjsnd6e54d810694';
-
 /**
  * POST /api/instagram/download
- * Download video from Instagram URL using RapidAPI
+ * Download video from Instagram URL
  */
 router.post('/download', async (req, res) => {
   try {
     const { url } = req.body;
     
-    console.log('Download request received:', url);
+    console.log('Download request:', url);
     
     // Validate URL
-    if (!url || !isValidInstagramUrl(url)) {
+    if (!url || !url.includes('instagram.com')) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Please provide a valid Instagram URL (post, reel, or IGTV)' 
+        error: 'Please provide a valid Instagram URL' 
       });
     }
 
-    // Extract shortcode from URL
+    // Extract shortcode
     const shortcode = extractShortcode(url);
     if (!shortcode) {
       return res.status(400).json({ 
@@ -36,24 +32,26 @@ router.post('/download', async (req, res) => {
       });
     }
     
-    console.log('Extracted shortcode:', shortcode);
+    console.log('Shortcode:', shortcode);
 
-    // Try RapidAPI first
+    // Call RapidAPI
     let videoData = null;
     
     try {
-      videoData = await fetchFromRapidAPI(shortcode);
-      console.log('RapidAPI success:', videoData);
-    } catch (rapidError) {
-      console.error('RapidAPI failed:', rapidError.message);
-      // Fallback: try direct URL construction
-      videoData = await generateFallbackData(shortcode, url);
+      videoData = await fetchFromRapidAPI(url);
+      console.log('RapidAPI success');
+    } catch (error) {
+      console.error('RapidAPI failed:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch video from Instagram. Please try again later.'
+      });
     }
 
     if (!videoData || !videoData.videoUrl) {
       return res.status(404).json({ 
         success: false, 
-        error: 'Could not find video for this post. It might be private, deleted, or not a video post.' 
+        error: 'No video found in this post' 
       });
     }
 
@@ -94,7 +92,6 @@ router.post('/download', async (req, res) => {
 
 /**
  * GET /api/instagram/history
- * Get download history
  */
 router.get('/history', (req, res) => {
   res.json({ 
@@ -103,41 +100,20 @@ router.get('/history', (req, res) => {
   });
 });
 
-/**
- * DELETE /api/instagram/history/:id
- * Remove item from history
- */
-router.delete('/history/:id', (req, res) => {
-  const id = parseInt(req.params.id);
-  const index = downloadHistory.findIndex(item => item.id === id);
-  
-  if (index === -1) {
-    return res.status(404).json({ success: false, error: 'Item not found' });
-  }
-  
-  downloadHistory.splice(index, 1);
-  res.json({ success: true });
-});
-
 // Helper functions
-function isValidInstagramUrl(url) {
-  const regex = /https?:\/\/(www\.)?instagram\.com\/(p|reel|reels|tv)\/[^\/]+/i;
-  return regex.test(url);
-}
-
 function extractShortcode(url) {
   const match = url.match(/instagram\.com\/(?:p|reel|reels|tv)\/([a-zA-Z0-9_-]+)/);
   return match ? match[1] : null;
 }
 
-async function fetchFromRapidAPI(shortcode) {
+async function fetchFromRapidAPI(url) {
   const options = {
     method: 'POST',
-    url: `https://${RAPIDAPI_HOST}/api/instagram/posts`,
+    url: 'https://instagram120.p.rapidapi.com/api/instagram/posts',
     headers: {
       'Content-Type': 'application/json',
-      'x-rapidapi-host': RAPIDAPI_HOST,
-      'x-rapidapi-key': RAPIDAPI_KEY
+      'x-rapidapi-host': 'instagram120.p.rapidapi.com',
+      'x-rapidapi-key': 'dc3bcd60c0mshbe8a2e179bedd3dp1a0b4bjsnd6e54d810694'
     },
     data: {
       username: 'instagram',
@@ -148,59 +124,65 @@ async function fetchFromRapidAPI(shortcode) {
 
   try {
     const response = await axios.request(options);
-    console.log('RapidAPI response:', JSON.stringify(response.data).substring(0, 500));
+    console.log('API Response type:', typeof response.data);
     
-    const posts = response.data;
-    if (!Array.isArray(posts)) {
-      throw new Error('Invalid response format');
+    // Handle different response formats
+    let posts = response.data;
+    if (typeof posts === 'object' && !Array.isArray(posts)) {
+      // API might return { data: [...] } or { posts: [...] }
+      posts = posts.data || posts.posts || posts.results || [];
     }
     
+    if (!Array.isArray(posts)) {
+      console.error('Unexpected response format:', JSON.stringify(response.data).substring(0, 200));
+      throw new Error('Invalid API response format');
+    }
+    
+    // Find post matching our URL/shortcode
+    const targetShortcode = extractShortcode(url);
     const post = posts.find(p => {
-      const postShortcode = p.shortcode || p.code || extractShortcode(p.url || '');
-      return postShortcode === shortcode;
+      const postShortcode = p.shortcode || p.code || extractShortcode(p.url || p.link || '');
+      return postShortcode === targetShortcode;
     });
     
     if (!post) {
-      throw new Error('Post not found in API response');
+      console.log('Post not found in response, using first available post');
+      // If we can't find specific post, try to use first post with video
+      const firstVideoPost = posts.find(p => extractVideoUrl(p));
+      if (firstVideoPost) {
+        return {
+          videoUrl: extractVideoUrl(firstVideoPost),
+          thumbnail: firstVideoPost.thumbnail_url || firstVideoPost.display_url || firstVideoPost.image_url || '',
+          title: firstVideoPost.caption || firstVideoPost.title || 'Instagram Video',
+          author: firstVideoPost.owner?.username || firstVideoPost.username || 'Unknown'
+        };
+      }
+    }
+    
+    if (!post) {
+      throw new Error('No video posts found');
     }
     
     return {
       videoUrl: extractVideoUrl(post),
-      thumbnail: post.thumbnail_url || post.display_url || post.image_url,
-      title: post.caption || post.title || `Instagram Video ${shortcode}`,
+      thumbnail: post.thumbnail_url || post.display_url || post.image_url || '',
+      title: post.caption || post.title || `Instagram Video ${targetShortcode}`,
       author: post.owner?.username || post.username || 'Unknown'
     };
   } catch (error) {
-    console.error('RapidAPI error:', error.message);
+    console.error('API Error:', error.response?.data || error.message);
     throw error;
   }
-}
-
-async function generateFallbackData(shortcode, url) {
-  // Fallback using ddinstagram.com (public Instagram mirror)
-  return {
-    videoUrl: `https://ddinstagram.com/p/${shortcode}/video.mp4`,
-    thumbnail: `https://www.instagram.com/p/${shortcode}/media/?size=l`,
-    title: `Instagram Video ${shortcode}`,
-    author: 'Instagram User'
-  };
 }
 
 function extractVideoUrl(post) {
   if (!post) return null;
   
-  // Try multiple possible locations for video URL
   if (post.video_url) return post.video_url;
   if (post.video_versions && post.video_versions[0]) return post.video_versions[0].url;
   if (post.media_url) return post.media_url;
   if (post.display_url) return post.display_url;
-  
-  // Check carousel media
-  if (post.carousel_media && post.carousel_media[0]) {
-    const media = post.carousel_media[0];
-    if (media.video_url) return media.video_url;
-    if (media.video_versions && media.video_versions[0]) return media.video_versions[0].url;
-  }
+  if (post.thumbnail_url) return post.thumbnail_url;
   
   return null;
 }
