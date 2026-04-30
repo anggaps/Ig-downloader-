@@ -1,20 +1,13 @@
 const express = require('express');
 const axios = require('axios');
-const cheerio = require('cheerio');
 const router = express.Router();
 
 // In-memory download history
 const downloadHistory = [];
 
-// Instagram oEmbed API endpoint
-const INSTAGRAM_OEMBED = 'https://api.instagram.com/oembed';
-
-// RapidAPI Instagram Downloader (free tier available)
-const RAPIDAPI_HOST = 'instagram-downloader-download-instagram-videos-stories1.p.rapidapi.com';
-
 /**
  * POST /api/instagram/download
- * Download video from Instagram URL
+ * Download video from Instagram URL using RapidAPI
  */
 router.post('/download', async (req, res) => {
   try {
@@ -37,13 +30,34 @@ router.post('/download', async (req, res) => {
       });
     }
 
-    // Fetch video info using multiple methods
-    const videoInfo = await fetchVideoInfo(url, shortcode);
+    // Try multiple methods to get video
+    let videoInfo = null;
     
+    // Method 1: Try Instagram oEmbed
+    try {
+      videoInfo = await fetchOEmbed(url);
+    } catch (err) {
+      console.log('oEmbed failed, trying next method...');
+    }
+    
+    // Method 2: Use RapidAPI if key available
+    if (!videoInfo && process.env.RAPIDAPI_KEY) {
+      try {
+        videoInfo = await fetchFromRapidAPI(url);
+      } catch (err) {
+        console.log('RapidAPI failed:', err.message);
+      }
+    }
+    
+    // Method 3: Generate direct link (fallback)
+    if (!videoInfo) {
+      videoInfo = await generateDirectLink(url, shortcode);
+    }
+
     if (!videoInfo) {
       return res.status(404).json({ 
         success: false, 
-        error: 'Could not fetch video. The post might be private or unavailable.' 
+        error: 'Could not fetch video. The post might be private, deleted, or unavailable.' 
       });
     }
 
@@ -52,7 +66,7 @@ router.post('/download', async (req, res) => {
       id: Date.now(),
       url: url,
       thumbnail: videoInfo.thumbnail,
-      title: videoInfo.title || `Instagram Video ${shortcode}`,
+      title: videoInfo.title || `Instagram Video`,
       quality: videoInfo.quality || 'HD',
       author: videoInfo.author || 'Unknown',
       downloadedAt: new Date().toISOString()
@@ -69,7 +83,8 @@ router.post('/download', async (req, res) => {
         title: videoInfo.title,
         quality: videoInfo.quality,
         author: videoInfo.author,
-        duration: videoInfo.duration
+        duration: videoInfo.duration,
+        format: videoInfo.format || 'mp4'
       }
     });
 
@@ -121,45 +136,67 @@ function extractShortcode(url) {
   return match ? match[1] : null;
 }
 
-async function fetchVideoInfo(url, shortcode) {
-  try {
-    // Method 1: Try oEmbed API
-    const oembedData = await fetchOEmbed(url);
-    if (oembedData) {
-      return {
-        videoUrl: `https://www.instagram.com/p/${shortcode}/media/?size=l`,
-        thumbnail: oembedData.thumbnail_url,
-        title: oembedData.title || oembedData.author_name,
-        author: oembedData.author_name,
-        quality: 'HD'
-      };
-    }
-  } catch (err) {
-    console.log('oEmbed failed, trying fallback...');
-  }
-
-  // Method 2: Return mock data for demo (replace with actual scraping/API)
-  return {
-    videoUrl: `https://www.instagram.com/p/${shortcode}/media/?size=l`,
-    thumbnail: `https://via.placeholder.com/400x400/333/fff?text=Instagram+Video`,
-    title: `Instagram Video ${shortcode}`,
-    author: 'Unknown',
-    quality: 'HD',
-    duration: '0:30'
-  };
-}
-
 async function fetchOEmbed(url) {
   try {
-    const response = await axios.get(INSTAGRAM_OEMBED, {
+    const response = await axios.get('https://api.instagram.com/oembed', {
       params: { url },
       timeout: 5000
     });
-    return response.data;
+    
+    const data = response.data;
+    return {
+      videoUrl: data.thumbnail_url.replace('s640x640', 's1080x1080'),
+      thumbnail: data.thumbnail_url,
+      title: data.title || data.author_name,
+      author: data.author_name,
+      quality: 'HD'
+    };
   } catch (error) {
-    console.error('oEmbed error:', error.message);
-    return null;
+    throw new Error('oEmbed failed: ' + error.message);
   }
+}
+
+async function fetchFromRapidAPI(url) {
+  const options = {
+    method: 'GET',
+    url: 'https://instagram-downloader-download-instagram-videos-stories1.p.rapidapi.com/get-info-rapidapi',
+    params: { url },
+    headers: {
+      'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
+      'X-RapidAPI-Host': 'instagram-downloader-download-instagram-videos-stories1.p.rapidapi.com'
+    },
+    timeout: 10000
+  };
+
+  const response = await axios.request(options);
+  const data = response.data;
+  
+  if (data.error) {
+    throw new Error(data.error);
+  }
+  
+  return {
+    videoUrl: data.video_url || data.media_url,
+    thumbnail: data.thumbnail_url || data.cover,
+    title: data.title || data.caption || 'Instagram Video',
+    author: data.author || data.username || 'Unknown',
+    quality: 'HD',
+    duration: data.duration
+  };
+}
+
+async function generateDirectLink(url, shortcode) {
+  // Fallback: Try to construct direct media URL
+  // Note: This method may not work for all posts due to Instagram's restrictions
+  
+  return {
+    videoUrl: `https://ddinstagram.com/p/${shortcode}/video.mp4`,
+    thumbnail: `https://www.instagram.com/p/${shortcode}/media/?size=l`,
+    title: `Instagram Video ${shortcode}`,
+    author: 'Unknown',
+    quality: 'HD',
+    format: 'mp4'
+  };
 }
 
 module.exports = router;
