@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Video Downloader</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <i class="fab fa-instagram"></i>
+                <h1>IG Downloader</h1>
+            </div>
+            <button id="themeToggle" class="theme-toggle">
+                <i class="fas fa-moon"></i>
+            </button>
+        </header>
+
+        <main>
+            <div class="input-section">
+                <div class="input-group">
+                    <input 
+                        type="text" 
+                        id="urlInput" 
+                        placeholder="Paste Instagram URL here..."
+                        autocomplete="off"
+                    >
+                    <button id="downloadBtn" class="btn-primary">
+                        <i class="fas fa-download"></i> Download
+                    </button>
+                </div>
+                <p class="hint">Supports: Posts, Reels, IGTV</p>
+            </div>
+
+            <div id="loading" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Processing video...</p>
+            </div>
+
+            <div id="result" class="result hidden">
+                <div class="video-preview">
+                    <img id="thumbnail" src="" alt="Video thumbnail">
+                    <div class="video-info">
+                        <h3 id="videoTitle">Video Title</h3>
+                        <div class="quality-selector">
+                            <label>Quality:</label>
+                            <select id="quality">
+                                <option value="hd">HD (1080p)</option>
+                                <option value="sd">SD (720p)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <a id="downloadLink" href="#" class="btn-download" download>
+                    <i class="fas fa-cloud-download-alt"></i> Download Video
+                </a>
+            </div>
+
+            <div id="error" class="error hidden">
+                <i class="fas fa-exclamation-circle"></i>
+                <p id="errorMessage">Something went wrong</p>
+            </div>
+
+            <div class="history-section">
+                <h2><i class="fas fa-history"></i> Download History</h2>
+                <div id="historyList" class="history-list">
+                    <p class="empty">No downloads yet</p>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>Made with <i class="fas fa-heart"></i> by noize28</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
