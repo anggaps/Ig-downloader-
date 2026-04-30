@@ -5,9 +5,13 @@ const router = express.Router();
 // In-memory download history
 const downloadHistory = [];
 
+// RapidAPI Configuration - Instagram Reels Downloader API
+const RAPIDAPI_HOST = 'instagram-reels-downloader-api.p.rapidapi.com';
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY || 'dc3bcd60c0mshbe8a2e179bedd3dp1a0b4bjsnd6e54d810694';
+
 /**
  * POST /api/instagram/download
- * Download video from Instagram URL using alternative methods
+ * Download video from Instagram URL
  */
 router.post('/download', async (req, res) => {
   try {
@@ -16,55 +20,31 @@ router.post('/download', async (req, res) => {
     console.log('Download request:', url);
     
     // Validate URL
-    if (!url || !url.includes('instagram.com')) {
+    if (!url || !isValidInstagramUrl(url)) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Please provide a valid Instagram URL' 
+        error: 'Please provide a valid Instagram URL (post, reel, or IGTV)' 
       });
     }
 
-    // Extract shortcode
-    const shortcode = extractShortcode(url);
-    if (!shortcode) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Could not extract shortcode from URL' 
-      });
-    }
-    
-    console.log('Shortcode:', shortcode);
-
-    // Try multiple download methods
+    // Call RapidAPI - Instagram Reels Downloader API
     let videoData = null;
     
-    // Method 1: Try Instagram oEmbed
     try {
-      videoData = await fetchFromOEmbed(url);
-      console.log('oEmbed success');
-    } catch (err) {
-      console.log('oEmbed failed:', err.message);
-    }
-    
-    // Method 2: Try savefrom.net API
-    if (!videoData) {
-      try {
-        videoData = await fetchFromSaveFrom(url);
-        console.log('SaveFrom success');
-      } catch (err) {
-        console.log('SaveFrom failed:', err.message);
-      }
-    }
-    
-    // Method 3: Try direct Instagram CDN
-    if (!videoData) {
-      videoData = await fetchFromInstagramCDN(url, shortcode);
-      console.log('CDN method success');
+      videoData = await fetchFromRapidAPI(url);
+      console.log('RapidAPI success:', videoData);
+    } catch (error) {
+      console.error('RapidAPI failed:', error.message);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to fetch video. API limit reached or URL is invalid/private.'
+      });
     }
 
     if (!videoData || !videoData.videoUrl) {
       return res.status(404).json({ 
         success: false, 
-        error: 'Could not find video. The post might be private, deleted, or not a video.' 
+        error: 'Could not find video. The post might be private, deleted, or not a video post.' 
       });
     }
 
@@ -113,96 +93,73 @@ router.get('/history', (req, res) => {
   });
 });
 
+/**
+ * DELETE /api/instagram/history/:id
+ */
+router.delete('/history/:id', (req, res) => {
+  const id = parseInt(req.params.id);
+  const index = downloadHistory.findIndex(item => item.id === id);
+  
+  if (index === -1) {
+    return res.status(404).json({ success: false, error: 'Item not found' });
+  }
+  
+  downloadHistory.splice(index, 1);
+  res.json({ success: true });
+});
+
 // Helper functions
-function extractShortcode(url) {
-  const match = url.match(/instagram\.com\/(?:p|reel|reels|tv)\/([a-zA-Z0-9_-]+)/);
-  return match ? match[1] : null;
+function isValidInstagramUrl(url) {
+  const regex = /https?:\/\/(www\.)?instagram\.com\/(p|reel|reels|tv)\/[^\/]+/i;
+  return regex.test(url);
 }
 
-async function fetchFromOEmbed(url) {
-  try {
-    const response = await axios.get('https://graph.facebook.com/v18.0/instagram_oembed', {
-      params: {
-        url: url,
-        access_token: process.env.FACEBOOK_APP_ID + '|' + process.env.FACEBOOK_APP_SECRET
-      },
-      timeout: 10000
-    });
-    
-    return {
-      videoUrl: response.data.thumbnail_url,
-      thumbnail: response.data.thumbnail_url,
-      title: response.data.title || 'Instagram Video',
-      author: response.data.author_name || 'Unknown'
-    };
-  } catch (error) {
-    throw new Error('oEmbed failed: ' + error.message);
-  }
-}
+async function fetchFromRapidAPI(url) {
+  const options = {
+    method: 'GET',
+    url: `https://${RAPIDAPI_HOST}/download`,
+    params: {
+      url: url
+    },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-rapidapi-host': RAPIDAPI_HOST,
+      'x-rapidapi-key': RAPIDAPI_KEY
+    },
+    timeout: 15000
+  };
 
-async function fetchFromSaveFrom(url) {
   try {
-    const response = await axios.get('https://savefrom.net/?url=' + encodeURIComponent(url), {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
+    const response = await axios.request(options);
+    console.log('API Response:', JSON.stringify(response.data).substring(0, 500));
     
-    // Parse HTML to find download links
-    const html = response.data;
-    const videoMatch = html.match(/href="(https?:\/\/[^"]+\.mp4[^"]*)"/i);
+    const data = response.data;
     
-    if (videoMatch) {
-      return {
-        videoUrl: videoMatch[1],
-        thumbnail: '',
-        title: 'Instagram Video',
-        author: 'Unknown'
-      };
+    // Handle different response formats
+    if (data.error) {
+      throw new Error(data.error);
     }
     
-    throw new Error('No video found in response');
-  } catch (error) {
-    throw new Error('SaveFrom failed: ' + error.message);
-  }
-}
-
-async function fetchFromInstagramCDN(url, shortcode) {
-  // Try to get media info from Instagram's public CDN
-  try {
-    // Method: Use Instagram's embed page to extract media
-    const response = await axios.get(`https://www.instagram.com/p/${shortcode}/embed/`, {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
-    });
+    // Extract video URL from various possible response formats
+    const videoUrl = data.video_url || data.videoUrl || data.url || data.media_url || data.download_url;
+    const thumbnail = data.thumbnail_url || data.thumbnail || data.image_url || data.cover || '';
+    const title = data.caption || data.title || data.description || 'Instagram Video';
+    const author = data.username || data.author || data.user || 'Instagram User';
     
-    const html = response.data;
-    
-    // Try to find video URL in embed page
-    const videoMatch = html.match(/video_url["']?\s*:\s*["'](https?:\/\/[^"']+)["']/i);
-    const thumbMatch = html.match(/thumbnail_url["']?\s*:\s*["'](https?:\/\/[^"']+)["']/i);
-    
-    if (videoMatch) {
-      return {
-        videoUrl: videoMatch[1].replace(/\\u0026/g, '&'),
-        thumbnail: thumbMatch ? thumbMatch[1].replace(/\\u0026/g, '&') : '',
-        title: 'Instagram Video',
-        author: 'Unknown'
-      };
+    if (!videoUrl) {
+      console.error('Response data:', JSON.stringify(data));
+      throw new Error('No video URL found in API response');
     }
     
-    throw new Error('No video URL found in embed page');
-  } catch (error) {
-    // Final fallback: Return a known working downloader service
     return {
-      videoUrl: `https://saveinsta.app/result?url=${encodeURIComponent(url)}`,
-      thumbnail: `https://www.instagram.com/p/${shortcode}/media/?size=l`,
-      title: `Instagram Video ${shortcode}`,
-      author: 'Instagram User'
+      videoUrl: videoUrl,
+      thumbnail: thumbnail,
+      title: title.substring(0, 100),
+      author: author
     };
+  } catch (error) {
+    console.error('API Error:', error.response?.data || error.message);
+    throw error;
   }
 }
 
