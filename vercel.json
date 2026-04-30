@@ -1,6 +1,5 @@
 {
   "version": 2,
-  "name": "ig-downloader",
   "builds": [
     {
       "src": "backend/server.js",
@@ -14,7 +13,7 @@
     },
     {
       "src": "/(.*)",
-      "dest": "/frontend/$1"
+      "dest": "/backend/server.js"
     }
   ]
 }

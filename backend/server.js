@@ -11,13 +11,13 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../frontend')));
+app.use(express.static(path.join(__dirname, '../public')));
 
 // API Routes
 app.use('/api/instagram', instagramRoutes);
 
 // Health check
-app.get('/api/health', (req, res) => {
+app.get('/api/health', (req, res) =>> {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
@@ -26,8 +26,8 @@ app.get('/api/health', (req, res) => {
 });
 
 // Serve frontend
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../frontend/index.html'));
+app.get('/', (req, res) =>> {
+  res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
 // 404 handler
@@ -46,9 +46,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`📁 Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+// Only listen if not in Vercel serverless environment
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+  });
+}
 
 module.exports = app;
