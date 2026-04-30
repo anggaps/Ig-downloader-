@@ -19,11 +19,9 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Serve static frontend
-app.use(express.static('public'));
-
-// Fallback to index.html for SPA
+// Serve inline HTML frontend
 app.get('/', (req, res) => {
+  res.setHeader('Content-Type', 'text/html');
   res.send(`
 <!DOCTYPE html>
 <html lang="en">
@@ -40,13 +38,14 @@ app.get('/', (req, res) => {
             display: flex;
             align-items: center;
             justify-content: center;
+            padding: 20px;
         }
         .container {
             background: white;
             border-radius: 20px;
             padding: 40px;
             max-width: 600px;
-            width: 90%;
+            width: 100%;
             box-shadow: 0 20px 60px rgba(0,0,0,0.3);
         }
         h1 {
@@ -90,6 +89,10 @@ app.get('/', (req, res) => {
         button:hover {
             transform: translateY(-2px);
         }
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
         .result {
             margin-top: 20px;
             padding: 20px;
@@ -105,6 +108,9 @@ app.get('/', (req, res) => {
             max-width: 300px;
             border-radius: 10px;
             margin-bottom: 15px;
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
         }
         .download-btn {
             display: inline-block;
@@ -114,6 +120,7 @@ app.get('/', (req, res) => {
             text-decoration: none;
             border-radius: 8px;
             margin-top: 10px;
+            text-align: center;
         }
         .loading {
             text-align: center;
@@ -138,9 +145,14 @@ app.get('/', (req, res) => {
             color: #dc3545;
             margin-top: 10px;
             display: none;
+            text-align: center;
         }
         .error.active {
             display: block;
+        }
+        .video-info {
+            text-align: center;
+            margin-bottom: 15px;
         }
     </style>
 </head>
@@ -151,18 +163,21 @@ app.get('/', (req, res) => {
         
         <div class="input-group">
             <input type="text" id="url" placeholder="Paste Instagram URL here...">
-            <button onclick="download()">Download</button>
+            <button id="downloadBtn" onclick="download()">Download</button>
         </div>
         
         <div class="loading" id="loading">
             <div class="spinner"></div>
-            <p>Processing...</p>
+            <p>Processing... Please wait</p>
         </div>
         
         <div class="result" id="result">
             <img id="thumbnail" class="thumbnail" src="" alt="Thumbnail">
-            <h3 id="title">Video Title</h3>
-            <a id="downloadLink" href="#" class="download-btn" download>Download Video</a>
+            <div class="video-info">
+                <h3 id="title">Video Title</h3>
+                <p id="author"></p>
+            </div>
+            <a id="downloadLink" href="#" class="download-btn" target="_blank">⬇️ Download Video</a>
         </div>
         
         <div class="error" id="error"></div>
@@ -170,8 +185,10 @@ app.get('/', (req, res) => {
 
     <script>
         async function download() {
-            const url = document.getElementById('url').value;
-            if (!url.includes('instagram.com')) {
+            const url = document.getElementById('url').value.trim();
+            const btn = document.getElementById('downloadBtn');
+            
+            if (!url || !url.includes('instagram.com')) {
                 showError('Please enter a valid Instagram URL');
                 return;
             }
@@ -179,6 +196,8 @@ app.get('/', (req, res) => {
             document.getElementById('loading').classList.add('active');
             document.getElementById('result').classList.remove('active');
             document.getElementById('error').classList.remove('active');
+            btn.disabled = true;
+            btn.textContent = 'Processing...';
             
             try {
                 const response = await fetch('/api/instagram/download', {
@@ -190,11 +209,12 @@ app.get('/', (req, res) => {
                 const data = await response.json();
                 
                 if (!data.success) {
-                    throw new Error(data.error);
+                    throw new Error(data.error || 'Failed to fetch video');
                 }
                 
                 document.getElementById('thumbnail').src = data.data.thumbnail;
                 document.getElementById('title').textContent = data.data.title;
+                document.getElementById('author').textContent = 'By: ' + (data.data.author || 'Unknown');
                 document.getElementById('downloadLink').href = data.data.downloadUrl;
                 document.getElementById('result').classList.add('active');
                 
@@ -202,13 +222,21 @@ app.get('/', (req, res) => {
                 showError(err.message);
             } finally {
                 document.getElementById('loading').classList.remove('active');
+                btn.disabled = false;
+                btn.textContent = 'Download';
             }
         }
         
         function showError(msg) {
-            document.getElementById('error').textContent = msg;
-            document.getElementById('error').classList.add('active');
+            const errorEl = document.getElementById('error');
+            errorEl.textContent = msg;
+            errorEl.classList.add('active');
+            setTimeout(() => errorEl.classList.remove('active'), 5000);
         }
+        
+        document.getElementById('url').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') download();
+        });
     </script>
 </body>
 </html>
@@ -228,7 +256,7 @@ app.use((err, req, res, next) => {
 if (!process.env.VERCEL) {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(\`🚀 Server running on http://localhost:${PORT}\`);
   });
 }
 
