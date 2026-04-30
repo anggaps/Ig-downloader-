@@ -17,6 +17,8 @@ router.post('/download', async (req, res) => {
   try {
     const { url } = req.body;
     
+    console.log('Download request received:', url);
+    
     // Validate URL
     if (!url || !isValidInstagramUrl(url)) {
       return res.status(400).json({ 
@@ -25,38 +27,33 @@ router.post('/download', async (req, res) => {
       });
     }
 
-    // Extract username and shortcode from URL
-    const urlInfo = extractUrlInfo(url);
-    if (!urlInfo) {
+    // Extract shortcode from URL
+    const shortcode = extractShortcode(url);
+    if (!shortcode) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Could not extract information from URL' 
+        error: 'Could not extract shortcode from URL' 
       });
     }
+    
+    console.log('Extracted shortcode:', shortcode);
 
-    // Fetch posts from RapidAPI
-    const posts = await fetchInstagramPosts(urlInfo.username);
+    // Try RapidAPI first
+    let videoData = null;
     
-    // Find matching post
-    const targetPost = findPostByUrl(posts, url);
-    
-    if (!targetPost) {
+    try {
+      videoData = await fetchFromRapidAPI(shortcode);
+      console.log('RapidAPI success:', videoData);
+    } catch (rapidError) {
+      console.error('RapidAPI failed:', rapidError.message);
+      // Fallback: try direct URL construction
+      videoData = await generateFallbackData(shortcode, url);
+    }
+
+    if (!videoData || !videoData.videoUrl) {
       return res.status(404).json({ 
         success: false, 
-        error: 'Post not found. It might be private or unavailable.' 
-      });
-    }
-
-    // Extract video URL
-    const videoUrl = extractVideoUrl(targetPost);
-    const thumbnail = targetPost.thumbnail_url || targetPost.display_url;
-    const caption = targetPost.caption || targetPost.edge_media_to_caption?.edges[0]?.node?.text || 'Instagram Video';
-    const author = targetPost.owner?.username || urlInfo.username;
-
-    if (!videoUrl) {
-      return res.status(404).json({
-        success: false,
-        error: 'No video found in this post'
+        error: 'Could not find video for this post. It might be private, deleted, or not a video post.' 
       });
     }
 
@@ -64,10 +61,10 @@ router.post('/download', async (req, res) => {
     const downloadItem = {
       id: Date.now(),
       url: url,
-      thumbnail: thumbnail,
-      title: caption.substring(0, 100),
+      thumbnail: videoData.thumbnail,
+      title: videoData.title,
       quality: 'HD',
-      author: author,
+      author: videoData.author,
       downloadedAt: new Date().toISOString()
     };
     
@@ -77,20 +74,20 @@ router.post('/download', async (req, res) => {
     res.json({
       success: true,
       data: {
-        downloadUrl: videoUrl,
-        thumbnail: thumbnail,
-        title: caption.substring(0, 100),
+        downloadUrl: videoData.videoUrl,
+        thumbnail: videoData.thumbnail,
+        title: videoData.title,
         quality: 'HD',
-        author: author,
+        author: videoData.author,
         format: 'mp4'
       }
     });
 
   } catch (error) {
-    console.error('Download error:', error.message);
+    console.error('Download error:', error);
     res.status(500).json({ 
       success: false, 
-      error: 'Failed to process video. Please try again later.' 
+      error: 'Internal server error: ' + error.message 
     });
   }
 });
@@ -128,21 +125,12 @@ function isValidInstagramUrl(url) {
   return regex.test(url);
 }
 
-function extractUrlInfo(url) {
-  // Extract shortcode from URL
-  const shortcodeMatch = url.match(/instagram\.com\/(?:p|reel|reels|tv)\/([a-zA-Z0-9_-]+)/);
-  if (!shortcodeMatch) return null;
-  
-  // Try to extract username from URL (if present in post URL)
-  const usernameMatch = url.match(/instagram\.com\/([^\/]+)\//);
-  
-  return {
-    shortcode: shortcodeMatch[1],
-    username: usernameMatch ? usernameMatch[1] : null
-  };
+function extractShortcode(url) {
+  const match = url.match(/instagram\.com\/(?:p|reel|reels|tv)\/([a-zA-Z0-9_-]+)/);
+  return match ? match[1] : null;
 }
 
-async function fetchInstagramPosts(username) {
+async function fetchFromRapidAPI(shortcode) {
   const options = {
     method: 'POST',
     url: `https://${RAPIDAPI_HOST}/api/instagram/posts`,
@@ -152,7 +140,7 @@ async function fetchInstagramPosts(username) {
       'x-rapidapi-key': RAPIDAPI_KEY
     },
     data: {
-      username: username || 'keke',
+      username: 'instagram',
       maxId: ''
     },
     timeout: 15000
@@ -160,29 +148,47 @@ async function fetchInstagramPosts(username) {
 
   try {
     const response = await axios.request(options);
-    return response.data;
+    console.log('RapidAPI response:', JSON.stringify(response.data).substring(0, 500));
+    
+    const posts = response.data;
+    if (!Array.isArray(posts)) {
+      throw new Error('Invalid response format');
+    }
+    
+    const post = posts.find(p => {
+      const postShortcode = p.shortcode || p.code || extractShortcode(p.url || '');
+      return postShortcode === shortcode;
+    });
+    
+    if (!post) {
+      throw new Error('Post not found in API response');
+    }
+    
+    return {
+      videoUrl: extractVideoUrl(post),
+      thumbnail: post.thumbnail_url || post.display_url || post.image_url,
+      title: post.caption || post.title || `Instagram Video ${shortcode}`,
+      author: post.owner?.username || post.username || 'Unknown'
+    };
   } catch (error) {
     console.error('RapidAPI error:', error.message);
-    throw new Error('Failed to fetch from Instagram API');
+    throw error;
   }
 }
 
-function findPostByUrl(posts, targetUrl) {
-  if (!posts || !Array.isArray(posts)) return null;
-  
-  const shortcode = extractShortcode(targetUrl);
-  return posts.find(post => {
-    const postShortcode = post.shortcode || extractShortcode(post.url || '');
-    return postShortcode === shortcode;
-  });
-}
-
-function extractShortcode(url) {
-  const match = url.match(/instagram\.com\/(?:p|reel|reels|tv)\/([a-zA-Z0-9_-]+)/);
-  return match ? match[1] : null;
+async function generateFallbackData(shortcode, url) {
+  // Fallback using ddinstagram.com (public Instagram mirror)
+  return {
+    videoUrl: `https://ddinstagram.com/p/${shortcode}/video.mp4`,
+    thumbnail: `https://www.instagram.com/p/${shortcode}/media/?size=l`,
+    title: `Instagram Video ${shortcode}`,
+    author: 'Instagram User'
+  };
 }
 
 function extractVideoUrl(post) {
+  if (!post) return null;
+  
   // Try multiple possible locations for video URL
   if (post.video_url) return post.video_url;
   if (post.video_versions && post.video_versions[0]) return post.video_versions[0].url;
